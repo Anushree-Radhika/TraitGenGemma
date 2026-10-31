@@ -17,13 +17,28 @@ class GemmaTraitGen(nn.Module):
         self.device = device
         self.n_img_tokens = n_img_tokens
 
-        # tokenizer: right padding (Gemma defaults to left), explicit pad token
+        self._build_tokenizer(lm_id)
+        self._build_encoder(clip_id, device)
+        text_rms, hidden = self._build_decoder(lm_id, device)
+        self._build_projector(hidden, text_rms, device)
+
+        # trainable params must be fp32 for GradScaler
+        for m in (self.visual, self.lm):
+            for n, p in m.named_parameters():
+                if "lora_" in n:
+                    p.data = p.data.float()
+                    p.requires_grad = True
+
+    # ------------------------------------------------------------ builders
+    def _build_tokenizer(self, lm_id):
+        # right padding (Gemma defaults to left), explicit pad token
         self.tokenizer = AutoTokenizer.from_pretrained(lm_id)
         self.tokenizer.padding_side = "right"
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # ---- vision: BioCLIP in fp16, LoRA on MLPs of last 6 blocks
+    def _build_encoder(self, clip_id, device):
+        """BioCLIP in fp16, LoRA on the MLPs of the last 6 blocks."""
         clip, self.preprocess_train, self.preprocess_val = open_clip.create_model_and_transforms(clip_id)
         visual = clip.visual
         del clip
@@ -38,7 +53,8 @@ class GemmaTraitGen(nn.Module):
         )
         self.visual = get_peft_model(visual, enc_cfg)
 
-        # ---- decoder: FP32 weights, eager attention (Gemma 3 overflows in fp16)
+    def _build_decoder(self, lm_id, device):
+        """FP32 weights, eager attention (Gemma 3 overflows in fp16)."""
         lm = AutoModelForCausalLM.from_pretrained(
             lm_id, dtype=torch.float32, attn_implementation="eager"
         ).to(device)
@@ -56,15 +72,10 @@ class GemmaTraitGen(nn.Module):
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         )
         self.lm = get_peft_model(lm, dec_cfg)
+        return text_rms, hidden
 
-        # trainable params must be fp32 for GradScaler
-        for m in (self.visual, self.lm):
-            for n, p in m.named_parameters():
-                if "lora_" in n:
-                    p.data = p.data.float()
-                    p.requires_grad = True
-
-        # ---- projector: LN -> MLP -> LN(no affine) * learnable scale (init = text embedding RMS)
+    def _build_projector(self, hidden, text_rms, device):
+        """LN -> MLP -> LN(no affine) * learnable scale (init = text embedding RMS)."""
         self.vis_norm = nn.LayerNorm(768)
         self.projector = nn.Sequential(nn.Linear(768, hidden), nn.GELU(), nn.Linear(hidden, hidden))
         self.out_norm = nn.LayerNorm(hidden, elementwise_affine=False)
@@ -74,9 +85,14 @@ class GemmaTraitGen(nn.Module):
         self.out_norm.to(device)
         self.out_scale.data = self.out_scale.data.to(device)
 
+    # ------------------------------------------------------------ params
     def projector_params(self):
         return list(self.vis_norm.parameters()) + list(self.projector.parameters()) + [self.out_scale]
 
+    def lora_params(self, module):
+        return [p for n, p in module.named_parameters() if "lora_" in n]
+
+    # ------------------------------------------------------------ forward
     def encode_images(self, pixels):
         with torch.autocast("cuda", dtype=torch.float16):
             _, tokens = self.visual(pixels.to(self.device, dtype=torch.float16))   # (B,196,768)

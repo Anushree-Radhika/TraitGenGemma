@@ -1,5 +1,4 @@
-"""Species parsing, stopping criteria, debugging helper, checkpointing and plotting."""
-import json
+"""Species parsing, generation stopping criterion, NaN debugging and training-curve plots."""
 import os
 import re
 
@@ -22,7 +21,7 @@ def norm_name(s):
 
 
 class SpeciesDone(StoppingCriteria):
-    """Stop generation for a sequence once  species of "<name>"  has been written."""
+    """Stop each sequence once  species of "<name>"  has been written."""
 
     def __init__(self, tokenizer):
         self.tok = tokenizer
@@ -34,7 +33,7 @@ class SpeciesDone(StoppingCriteria):
 
 @torch.no_grad()
 def debug_first_nonfinite(model, batch, device, eos_id):
-    """Finds the FIRST module producing inf/nan."""
+    """Run one batch with hooks and report the FIRST module that outputs inf/nan."""
     handles = []
 
     def mk(name):
@@ -57,20 +56,8 @@ def debug_first_nonfinite(model, batch, device, eos_id):
             h.remove()
 
 
-def save_best(base_model, ckpt_dir, epoch, metrics):
-    path = os.path.join(ckpt_dir, "best")
-    os.makedirs(path, exist_ok=True)
-    base_model.visual.save_pretrained(os.path.join(path, "enc_lora"))
-    base_model.lm.save_pretrained(os.path.join(path, "dec_lora"))
-    torch.save({"vis_norm": base_model.vis_norm.state_dict(),
-                "projector": base_model.projector.state_dict(),
-                "out_scale": base_model.out_scale.data.cpu()},
-               os.path.join(path, "projector.pt"))
-    json.dump({"epoch": epoch, **metrics}, open(os.path.join(path, "meta.json"), "w"), indent=2)
-
-
-def save_curves(hist, ckpt_dir):
-    os.makedirs(ckpt_dir, exist_ok=True)
+def save_curves(hist, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
     epochs = range(1, len(hist["train_loss"]) + 1)
     for name, series, ylabel in (
         ("loss.png", {"Train Loss": hist["train_loss"], "Val Loss": hist["val_loss"]}, "Loss"),
@@ -84,5 +71,5 @@ def save_curves(hist, ckpt_dir):
         plt.title(ylabel + " per epoch")
         plt.legend()
         plt.grid(True)
-        plt.savefig(os.path.join(ckpt_dir, name))
+        plt.savefig(os.path.join(out_dir, name))
         plt.close()
