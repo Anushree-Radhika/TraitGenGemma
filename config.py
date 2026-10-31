@@ -6,12 +6,12 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     # ---- paths
-    train_json: str = "/kaggle/input/datasets/neurallogica/dataset/train.json"
-    test_json: str = "/kaggle/input/datasets/neurallogica/dataset/test.json"
-    img_root: str = "/kaggle/working/CUB_200_2011/images/"
-    output_dir: str = "/kaggle/working/gpu_output"
-    checkpoint_dir: str = "/kaggle/working/checkpoints"      # best model -> <checkpoint_dir>/best
-    predictions_json: str = "/kaggle/working/test_predictions.json"
+    train_json: str = "train.json"
+    test_json: str = "test.json"
+    img_root: str = "CUB_200_2011/images/"
+    output_dir: str = "gpu_output"
+    checkpoint_dir: str = "checkpoints"      # best model -> <checkpoint_dir>/best
+    predictions_json: str = "test_predictions.json"
 
     # ---- models
     lm_id: str = "google/gemma-3-1b-pt"
