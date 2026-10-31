@@ -1,0 +1,11 @@
+torch
+torchvision
+transformers
+peft
+accelerate
+open_clip_torch
+huggingface_hub
+safetensors
+matplotlib
+tqdm
+pillow
